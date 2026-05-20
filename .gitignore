@@ -1,0 +1,21 @@
+# Python virtual environments
+.venv/
+**/.venv/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Environment files
+.env
+**/.env
+
+# Local storage and generated indexes
+storage/
+**/storage/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
