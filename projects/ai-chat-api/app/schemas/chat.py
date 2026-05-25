@@ -23,6 +23,136 @@ class ChatRealResponse(BaseModel):
     model: str
 
 
+class ChatToolDemoRequest(BaseModel):
+    # 工具调用演示接口的用户输入。
+    message: str = Field(..., min_length=1, max_length=2000, description="用户输入的消息")
+
+
+class ChatToolCallItem(BaseModel):
+    # 本次实际执行的工具名。
+    tool_name: str
+    # 模型给工具传入的参数。
+    tool_args: dict[str, str | None]
+    # 工具执行后的原始结果。
+    tool_result: str
+
+
+class ChatToolDemoResponse(BaseModel):
+    # 模型最终返回给用户的自然语言回答。
+    reply: str
+    # 当前调用的模型名。
+    model: str
+    # 本次是否真的发生了工具调用。
+    used_tool: bool
+    # 本次执行过的工具列表。
+    tool_calls: list[ChatToolCallItem]
+
+
+class ChatAgentLoopDemoRequest(BaseModel):
+    # Agent 循环演示接口的用户输入。
+    message: str = Field(..., min_length=1, max_length=2000, description="用户输入的消息")
+    # 最多允许模型连续调用几轮工具，避免无限循环。
+    max_steps: int = Field(3, ge=1, le=5, description="最大工具调用轮数")
+
+
+class ChatAgentLoopStepItem(BaseModel):
+    # 当前是第几轮工具调用。
+    step: int
+    # 本轮实际执行的工具名。
+    tool_name: str
+    # 本轮工具参数。
+    tool_args: dict[str, str | None]
+    # 本轮工具执行结果。
+    tool_result: str
+
+
+class ChatAgentLoopDemoResponse(BaseModel):
+    # 模型最终返回给用户的自然语言回答。
+    reply: str
+    # 当前调用的模型名。
+    model: str
+    # 是否发生过工具调用。
+    used_tool: bool
+    # 实际执行了多少轮工具调用。
+    total_steps: int
+    # 是否因为达到 max_steps 而停止循环。
+    stopped_by_max_steps: bool
+    # 每一轮的工具调用明细。
+    steps: list[ChatAgentLoopStepItem]
+
+
+class ChatAgentSessionDemoRequest(BaseModel):
+    # 会话 id，用来区分不同用户或不同对话窗口。
+    session_id: str = Field(..., min_length=1, max_length=100, description="会话唯一标识")
+    # 当前这一轮用户输入的消息。
+    message: str = Field(..., min_length=1, max_length=2000, description="用户输入的消息")
+    # 最多允许 Agent 连续调用几轮工具，避免无限循环。
+    max_steps: int = Field(3, ge=1, le=5, description="最大工具调用轮数")
+
+
+class ChatAgentSessionDemoResponse(BaseModel):
+    # 当前会话 id。
+    session_id: str
+    # 模型最终返回给用户的自然语言回答。
+    reply: str
+    # 当前调用的模型名。
+    model: str
+    # 是否发生过工具调用。
+    used_tool: bool
+    # 实际执行了多少次工具调用。
+    total_steps: int
+    # 是否因为达到 max_steps 而停止循环。
+    stopped_by_max_steps: bool
+    # 当前会话累计保存了多少条历史消息。
+    history_count: int
+    # 本次请求里的工具调用明细。
+    steps: list[ChatAgentLoopStepItem]
+
+
+class ChatAgentRagDemoRequest(BaseModel):
+    # 用户当前输入的问题。
+    message: str = Field(..., min_length=1, max_length=2000, description="用户输入的消息")
+    # 最多允许 Agent 连续调用几轮工具。
+    max_steps: int = Field(3, ge=1, le=5, description="最大工具调用轮数")
+
+
+class ChatAgentRagDemoResponse(BaseModel):
+    # 模型最终返回给用户的自然语言回答。
+    reply: str
+    # 当前调用的模型名。
+    model: str
+    # 是否发生过工具调用。
+    used_tool: bool
+    # 实际执行了多少次工具调用。
+    total_steps: int
+    # 是否因为达到 max_steps 而停止循环。
+    stopped_by_max_steps: bool
+    # 本次请求里的工具调用明细。
+    steps: list[ChatAgentLoopStepItem]
+
+
+class ChatAgentRouteDemoRequest(BaseModel):
+    # 用户当前输入的问题。
+    message: str = Field(..., min_length=1, max_length=2000, description="用户输入的消息")
+    # 最多允许 Agent 连续调用几轮工具。
+    max_steps: int = Field(3, ge=1, le=5, description="最大工具调用轮数")
+
+
+class ChatAgentRouteDemoResponse(BaseModel):
+    # 模型最终返回给用户的自然语言回答。
+    reply: str
+    # 当前调用的模型名。
+    model: str
+    # 是否发生过工具调用。
+    used_tool: bool
+    # 实际执行了多少次工具调用。
+    total_steps: int
+    # 是否因为达到 max_steps 而停止循环。
+    stopped_by_max_steps: bool
+    # 本次请求里的工具调用明细。
+    steps: list[ChatAgentLoopStepItem]
+
+
 class ChatSummaryRequest(BaseModel):
     # 用户希望被总结或解释的问题。
     message: str = Field(..., min_length=1, max_length=2000, description="需要总结的用户输入")

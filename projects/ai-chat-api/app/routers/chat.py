@@ -4,6 +4,14 @@ from fastapi.responses import StreamingResponse
 from app.schemas.chat import (
     ChunkDemoRequest,
     ChunkDemoResponse,
+    ChatAgentLoopDemoRequest,
+    ChatAgentLoopDemoResponse,
+    ChatAgentRagDemoRequest,
+    ChatAgentRagDemoResponse,
+    ChatAgentRouteDemoRequest,
+    ChatAgentRouteDemoResponse,
+    ChatAgentSessionDemoRequest,
+    ChatAgentSessionDemoResponse,
     ChatDemoRequest,
     ChatDemoResponse,
     ChatFaissIndexBuildRequest,
@@ -22,6 +30,8 @@ from app.schemas.chat import (
     ChatSessionResponse,
     ChatSummaryRequest,
     ChatSummaryResponse,
+    ChatToolDemoRequest,
+    ChatToolDemoResponse,
     ChatUploadIndexResponse,
     ChatVectorIndexBuildRequest,
     ChatVectorIndexBuildResponse,
@@ -36,6 +46,10 @@ from app.schemas.chat import (
 )
 from app.services.chat_service import (
     build_chunk_demo_reply,
+    build_agent_loop_demo_reply,
+    build_agent_rag_demo_reply,
+    build_agent_route_demo_reply,
+    build_agent_session_demo_reply,
     build_demo_reply,
     build_faiss_index_reply,
     build_faiss_search_reply,
@@ -46,6 +60,7 @@ from app.services.chat_service import (
     build_session_reply,
     build_stream_reply,
     build_summary_reply,
+    build_tool_demo_reply,
     build_upload_index_reply,
     build_vector_index_reply,
     build_vector_index_list_reply,
@@ -71,6 +86,36 @@ def chat_real(request: ChatRealRequest) -> ChatRealResponse:
     # 真实聊天接口：把用户消息交给大模型，再把模型回复返回给前端。
     reply_text, model_name = build_real_reply(request)
     return ChatRealResponse(reply=reply_text, model=model_name)
+
+
+@router.post("/tool-demo", response_model=ChatToolDemoResponse)
+def chat_tool_demo(request: ChatToolDemoRequest) -> ChatToolDemoResponse:
+    # Tool Calling 演示接口：让模型决定是否调用工具，再返回最终结果。
+    return build_tool_demo_reply(request)
+
+
+@router.post("/agent-loop-demo", response_model=ChatAgentLoopDemoResponse)
+def chat_agent_loop_demo(request: ChatAgentLoopDemoRequest) -> ChatAgentLoopDemoResponse:
+    # Agent 循环演示接口：允许模型连续多轮调用工具，直到信息足够再回答。
+    return build_agent_loop_demo_reply(request)
+
+
+@router.post("/agent-session-demo", response_model=ChatAgentSessionDemoResponse)
+def chat_agent_session_demo(request: ChatAgentSessionDemoRequest) -> ChatAgentSessionDemoResponse:
+    # 带会话记忆的 Agent 演示接口：同一个 session_id 下能结合历史消息继续完成任务。
+    return build_agent_session_demo_reply(request)
+
+
+@router.post("/agent-rag-demo", response_model=ChatAgentRagDemoResponse)
+def chat_agent_rag_demo(request: ChatAgentRagDemoRequest) -> ChatAgentRagDemoResponse:
+    # Agent + RAG 演示接口：让 Agent 自己判断是否需要调用知识库检索工具。
+    return build_agent_rag_demo_reply(request)
+
+
+@router.post("/agent-route-demo", response_model=ChatAgentRouteDemoResponse)
+def chat_agent_route_demo(request: ChatAgentRouteDemoRequest) -> ChatAgentRouteDemoResponse:
+    # 多工具路由 + 缺参追问演示接口：信息不够时先追问，信息足够时再调工具。
+    return build_agent_route_demo_reply(request)
 
 
 @router.post("/summary", response_model=ChatSummaryResponse)

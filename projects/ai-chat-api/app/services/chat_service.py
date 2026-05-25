@@ -3,6 +3,7 @@ import re
 from collections import defaultdict
 from collections.abc import Generator
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from math import sqrt
 from pathlib import Path
@@ -29,11 +30,23 @@ from app.schemas.chat import (
     ChatRagResponse,
     ChatRagSearchRequest,
     ChatRagSearchResponse,
+    ChatAgentLoopDemoRequest,
+    ChatAgentLoopDemoResponse,
+    ChatAgentLoopStepItem,
+    ChatAgentRagDemoRequest,
+    ChatAgentRagDemoResponse,
+    ChatAgentRouteDemoRequest,
+    ChatAgentRouteDemoResponse,
+    ChatAgentSessionDemoRequest,
+    ChatAgentSessionDemoResponse,
     ChatRealRequest,
     ChatSessionRequest,
     ChatSessionResponse,
     ChatSummaryRequest,
     ChatSummaryResponse,
+    ChatToolCallItem,
+    ChatToolDemoRequest,
+    ChatToolDemoResponse,
     ChatTurn,
     ChatUploadIndexResponse,
     ChatVectorIndexBuildRequest,
@@ -288,6 +301,175 @@ def ensure_api_key() -> None:
         raise ValueError("缺少 DASHSCOPE_API_KEY，请先在 .env 中配置百炼 API Key")
 
 
+TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "当用户询问现在几点、今天日期、当前时间时调用",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_mock_weather",
+            "description": "当用户询问某个城市的天气、气温、是否带伞时调用",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "要查询天气的城市，例如杭州、上海、北京",
+                    }
+                },
+                "required": ["city"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_demo_knowledge",
+            "description": "当用户询问 FastAPI、知识库内容、课程笔记或项目文档相关问题时调用",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "要在演示知识库里检索的问题",
+                    }
+                },
+                "required": ["question"],
+            },
+        },
+    },
+]
+
+
+def get_current_time_tool() -> str:
+    # 本地时间工具：返回当前机器时间。
+    now = datetime.now()
+    result = {
+        "current_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "weekday": f"星期{'一二三四五六日'[now.weekday()]}",
+    }
+    return json.dumps(result, ensure_ascii=False)
+
+
+def get_mock_weather_tool(city: str) -> str:
+    # 本地天气工具：先用固定假数据演示工具调用流程。
+    normalized_city = city.strip()
+    if not normalized_city:
+        raise ValueError("get_mock_weather 工具缺少 city 参数")
+
+    weather_map = {
+        "杭州": {"weather": "小雨", "temperature": "22C", "advice": "建议带伞"},
+        "上海": {"weather": "多云", "temperature": "26C", "advice": "可以正常出行"},
+        "北京": {"weather": "晴", "temperature": "28C", "advice": "注意防晒"},
+        "深圳": {"weather": "阵雨", "temperature": "29C", "advice": "最好带伞"},
+    }
+    city_weather = weather_map.get(
+        normalized_city,
+        {
+            "weather": "未知",
+            "temperature": "未知",
+            "advice": "当前演示工具暂不支持这个城市，请改问杭州、上海、北京或深圳",
+        },
+    )
+
+    result = {
+        "city": normalized_city,
+        **city_weather,
+    }
+    return json.dumps(result, ensure_ascii=False)
+
+
+def search_demo_knowledge_tool(question: str) -> str:
+    # 最小知识库检索工具：复用之前的 RAG 切分和关键词检索逻辑，返回命中的片段。
+    cleaned_question = question.strip()
+    if not cleaned_question:
+        raise ValueError("search_demo_knowledge 工具缺少 question 参数")
+
+    knowledge = load_demo_knowledge()
+    chunk_size = 120
+    chunk_overlap = 20
+    chunk_strategy = "paragraph"
+    chunks = split_text_into_chunks(
+        knowledge,
+        chunk_size,
+        chunk_overlap,
+        chunk_strategy,
+    )
+    selected_chunks = select_relevant_chunks(cleaned_question, chunks, top_k=2)
+
+    result = {
+        "question": cleaned_question,
+        "chunk_strategy": chunk_strategy,
+        "selected_chunks": selected_chunks,
+    }
+    return json.dumps(result, ensure_ascii=False)
+
+
+def execute_demo_tool(tool_name: str, tool_args: dict) -> str:
+    # 工具执行器：根据工具名真正调用本地函数。
+    if tool_name == "get_current_time":
+        return get_current_time_tool()
+    if tool_name == "get_mock_weather":
+        city = str(tool_args.get("city", "") or "").strip()
+        return get_mock_weather_tool(city)
+    if tool_name == "search_demo_knowledge":
+        question = str(tool_args.get("question", "") or "").strip()
+        return search_demo_knowledge_tool(question)
+    raise ValueError(f"暂不支持的工具：{tool_name}")
+
+
+def serialize_tool_calls(tool_calls) -> list[dict]:
+    # 把模型返回的 tool_calls 转成普通字典，方便重新塞回 messages。
+    serialized_tool_calls: list[dict] = []
+    for tool_call in tool_calls:
+        serialized_tool_calls.append(
+            {
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.function.name,
+                    "arguments": tool_call.function.arguments,
+                },
+            }
+        )
+    return serialized_tool_calls
+
+
+def parse_tool_args(raw_arguments: str) -> dict:
+    # 把模型返回的 JSON 字符串参数解析成 Python 字典。
+    try:
+        tool_args = json.loads(raw_arguments)
+    except json.JSONDecodeError as exc:
+        raise ValueError("模型返回的工具参数不是合法 JSON") from exc
+
+    if not isinstance(tool_args, dict):
+        raise ValueError("模型返回的工具参数必须是 JSON 对象")
+    return tool_args
+
+
+def normalize_tool_args_for_response(tool_args: dict) -> dict[str, str | None]:
+    # 把工具参数整理成更适合返回给前端查看的格式。
+    return {key: None if value is None else str(value) for key, value in tool_args.items()}
+
+
+def build_messages_from_history(history: list[ChatTurn], system_prompt: str) -> list[dict[str, str]]:
+    # 把 session_store 里的历史消息恢复成发给模型的 messages 结构。
+    messages = [{"role": "system", "content": system_prompt}]
+    for turn in history:
+        messages.append({"role": turn.role, "content": turn.content})
+    return messages
+
+
 def build_demo_reply(request: ChatDemoRequest) -> str:
     # 演示接口：简单拼接回复。
     message = request.message.strip()
@@ -314,6 +496,454 @@ def build_real_reply(request: ChatRealRequest) -> tuple[str, str]:
 
     reply_text = completion.choices[0].message.content or ""
     return reply_text, settings.llm_model
+
+
+def build_tool_demo_reply(request: ChatToolDemoRequest) -> ChatToolDemoResponse:
+    # 最小 Tool Calling 演示：
+    # 先让模型决定要不要调工具；
+    # 如果调了，后端执行工具；
+    # 再把工具结果交回模型，让模型组织最终回答。
+    message = request.message.strip()
+    ensure_api_key()
+
+    client = get_llm_client()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是一名 AI 助手。"
+                "如果用户在问时间，就调用 get_current_time。"
+                "如果用户在问天气、气温、是否带伞，就调用 get_mock_weather。"
+                "如果问题不需要工具，就直接回答。"
+            ),
+        },
+        {"role": "user", "content": message},
+    ]
+
+    first_completion = client.chat.completions.create(
+        model=settings.llm_model,
+        messages=messages,
+        tools=TOOL_DEFINITIONS,
+        tool_choice="auto",
+    )
+
+    assistant_message = first_completion.choices[0].message
+    tool_calls = assistant_message.tool_calls or []
+    if not tool_calls:
+        return ChatToolDemoResponse(
+            reply=assistant_message.content or "",
+            model=settings.llm_model,
+            used_tool=False,
+            tool_calls=[],
+        )
+
+    serialized_tool_calls = serialize_tool_calls(tool_calls)
+    executed_tool_calls: list[ChatToolCallItem] = []
+
+    messages.append(
+        {
+            "role": "assistant",
+            "content": assistant_message.content or "",
+            "tool_calls": serialized_tool_calls,
+        }
+    )
+
+    for tool_call in tool_calls:
+        raw_arguments = tool_call.function.arguments or "{}"
+        tool_args = parse_tool_args(raw_arguments)
+        tool_result = execute_demo_tool(tool_call.function.name, tool_args)
+        executed_tool_calls.append(
+            ChatToolCallItem(
+                tool_name=tool_call.function.name,
+                tool_args=normalize_tool_args_for_response(tool_args),
+                tool_result=tool_result,
+            )
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": tool_result,
+            }
+        )
+
+    second_completion = client.chat.completions.create(
+        model=settings.llm_model,
+        messages=messages,
+    )
+    reply_text = second_completion.choices[0].message.content or ""
+
+    return ChatToolDemoResponse(
+        reply=reply_text,
+        model=settings.llm_model,
+        used_tool=True,
+        tool_calls=executed_tool_calls,
+    )
+
+
+def build_agent_loop_demo_reply(request: ChatAgentLoopDemoRequest) -> ChatAgentLoopDemoResponse:
+    # 最小 Agent 循环演示：
+    # 不再固定“最多只调用一轮工具”，而是允许模型在一个循环里多次决定是否继续调工具。
+    message = request.message.strip()
+    ensure_api_key()
+
+    client = get_llm_client()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是一名会分步调用工具的 AI 助手。"
+                "如果需要先查时间，再结合时间判断是否查天气，可以分多步调用工具。"
+                "如果信息已经足够，就直接给出最终答案，不要继续调用工具。"
+            ),
+        },
+        {"role": "user", "content": message},
+    ]
+
+    executed_steps: list[ChatAgentLoopStepItem] = []
+
+    for step in range(1, request.max_steps + 1):
+        completion = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=messages,
+            tools=TOOL_DEFINITIONS,
+            tool_choice="auto",
+        )
+        assistant_message = completion.choices[0].message
+        tool_calls = assistant_message.tool_calls or []
+
+        if not tool_calls:
+            return ChatAgentLoopDemoResponse(
+                reply=assistant_message.content or "",
+                model=settings.llm_model,
+                used_tool=bool(executed_steps),
+                total_steps=len(executed_steps),
+                stopped_by_max_steps=False,
+                steps=executed_steps,
+            )
+
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_message.content or "",
+                "tool_calls": serialize_tool_calls(tool_calls),
+            }
+        )
+
+        for tool_call in tool_calls:
+            raw_arguments = tool_call.function.arguments or "{}"
+            tool_args = parse_tool_args(raw_arguments)
+            tool_result = execute_demo_tool(tool_call.function.name, tool_args)
+
+            executed_steps.append(
+                ChatAgentLoopStepItem(
+                    step=step,
+                    tool_name=tool_call.function.name,
+                    tool_args=normalize_tool_args_for_response(tool_args),
+                    tool_result=tool_result,
+                )
+            )
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_result,
+                }
+            )
+
+    final_completion = client.chat.completions.create(
+        model=settings.llm_model,
+        messages=messages,
+    )
+    final_reply = final_completion.choices[0].message.content or ""
+
+    return ChatAgentLoopDemoResponse(
+        reply=final_reply,
+        model=settings.llm_model,
+        used_tool=bool(executed_steps),
+        total_steps=len(executed_steps),
+        stopped_by_max_steps=True,
+        steps=executed_steps,
+    )
+
+
+def build_agent_session_demo_reply(request: ChatAgentSessionDemoRequest) -> ChatAgentSessionDemoResponse:
+    # 带会话记忆的最小 Agent：
+    # 在同一个 session_id 下，把之前的用户问题和助手回答一起带上，
+    # 让模型能结合历史上下文继续决定是否调用工具。
+    cleaned_message = request.message.strip()
+    ensure_api_key()
+
+    system_prompt = (
+        "你是一名带会话记忆、会分步调用工具的 AI 助手。"
+        "你要结合当前 session 里的历史消息理解用户的省略表达。"
+        "如果历史里已经提到城市、任务目标等信息，本轮可以继续沿用。"
+        "如果需要更多信息，就调用工具；如果信息已经足够，就直接回答。"
+    )
+
+    history = session_store[request.session_id]
+    messages = build_messages_from_history(history, system_prompt)
+    messages.append({"role": "user", "content": cleaned_message})
+
+    client = get_llm_client()
+    executed_steps: list[ChatAgentLoopStepItem] = []
+
+    for step in range(1, request.max_steps + 1):
+        completion = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=messages,
+            tools=TOOL_DEFINITIONS,
+            tool_choice="auto",
+        )
+        assistant_message = completion.choices[0].message
+        tool_calls = assistant_message.tool_calls or []
+
+        if not tool_calls:
+            final_reply = assistant_message.content or ""
+            history.append(ChatTurn(role="user", content=cleaned_message))
+            history.append(ChatTurn(role="assistant", content=final_reply))
+
+            return ChatAgentSessionDemoResponse(
+                session_id=request.session_id,
+                reply=final_reply,
+                model=settings.llm_model,
+                used_tool=bool(executed_steps),
+                total_steps=len(executed_steps),
+                stopped_by_max_steps=False,
+                history_count=len(history),
+                steps=executed_steps,
+            )
+
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_message.content or "",
+                "tool_calls": serialize_tool_calls(tool_calls),
+            }
+        )
+
+        for tool_call in tool_calls:
+            raw_arguments = tool_call.function.arguments or "{}"
+            tool_args = parse_tool_args(raw_arguments)
+            tool_result = execute_demo_tool(tool_call.function.name, tool_args)
+
+            executed_steps.append(
+                ChatAgentLoopStepItem(
+                    step=step,
+                    tool_name=tool_call.function.name,
+                    tool_args=normalize_tool_args_for_response(tool_args),
+                    tool_result=tool_result,
+                )
+            )
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_result,
+                }
+            )
+
+    final_completion = client.chat.completions.create(
+        model=settings.llm_model,
+        messages=messages,
+    )
+    final_reply = final_completion.choices[0].message.content or ""
+    history.append(ChatTurn(role="user", content=cleaned_message))
+    history.append(ChatTurn(role="assistant", content=final_reply))
+
+    return ChatAgentSessionDemoResponse(
+        session_id=request.session_id,
+        reply=final_reply,
+        model=settings.llm_model,
+        used_tool=bool(executed_steps),
+        total_steps=len(executed_steps),
+        stopped_by_max_steps=True,
+        history_count=len(history),
+        steps=executed_steps,
+    )
+
+
+def build_agent_rag_demo_reply(request: ChatAgentRagDemoRequest) -> ChatAgentRagDemoResponse:
+    # Agent + RAG 最小演示：
+    # 给 Agent 增加一个“知识库检索工具”，让模型自己判断什么时候需要查知识库。
+    cleaned_message = request.message.strip()
+    ensure_api_key()
+
+    client = get_llm_client()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是一名会调用工具的 AI 助手。"
+                "如果用户询问时间，调用 get_current_time。"
+                "如果用户询问天气、气温、是否带伞，调用 get_mock_weather。"
+                "如果用户询问 FastAPI、演示知识库、课程知识点或项目文档内容，调用 search_demo_knowledge。"
+                "如果问题不需要工具，就直接回答。"
+                "如果你调用了 search_demo_knowledge，请优先基于检索结果回答。"
+            ),
+        },
+        {"role": "user", "content": cleaned_message},
+    ]
+
+    executed_steps: list[ChatAgentLoopStepItem] = []
+
+    for step in range(1, request.max_steps + 1):
+        completion = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=messages,
+            tools=TOOL_DEFINITIONS,
+            tool_choice="auto",
+        )
+        assistant_message = completion.choices[0].message
+        tool_calls = assistant_message.tool_calls or []
+
+        if not tool_calls:
+            return ChatAgentRagDemoResponse(
+                reply=assistant_message.content or "",
+                model=settings.llm_model,
+                used_tool=bool(executed_steps),
+                total_steps=len(executed_steps),
+                stopped_by_max_steps=False,
+                steps=executed_steps,
+            )
+
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_message.content or "",
+                "tool_calls": serialize_tool_calls(tool_calls),
+            }
+        )
+
+        for tool_call in tool_calls:
+            raw_arguments = tool_call.function.arguments or "{}"
+            tool_args = parse_tool_args(raw_arguments)
+            tool_result = execute_demo_tool(tool_call.function.name, tool_args)
+
+            executed_steps.append(
+                ChatAgentLoopStepItem(
+                    step=step,
+                    tool_name=tool_call.function.name,
+                    tool_args=normalize_tool_args_for_response(tool_args),
+                    tool_result=tool_result,
+                )
+            )
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_result,
+                }
+            )
+
+    final_completion = client.chat.completions.create(
+        model=settings.llm_model,
+        messages=messages,
+    )
+    final_reply = final_completion.choices[0].message.content or ""
+
+    return ChatAgentRagDemoResponse(
+        reply=final_reply,
+        model=settings.llm_model,
+        used_tool=bool(executed_steps),
+        total_steps=len(executed_steps),
+        stopped_by_max_steps=True,
+        steps=executed_steps,
+    )
+
+
+def build_agent_route_demo_reply(request: ChatAgentRouteDemoRequest) -> ChatAgentRouteDemoResponse:
+    # 多工具路由 + 缺参追问演示：
+    # 如果用户信息不足，就先追问，不要盲目调用工具；
+    # 如果信息已经足够，再选择合适工具执行。
+    cleaned_message = request.message.strip()
+    ensure_api_key()
+
+    client = get_llm_client()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是一名会调用工具的 AI 助手。"
+                "你可以调用 get_current_time、get_mock_weather、search_demo_knowledge。"
+                "如果用户询问天气，但没有明确城市，你必须先追问用户城市，不能直接调用 get_mock_weather。"
+                "如果用户询问知识库内容不明确，你可以先追问用户想了解哪方面。"
+                "只有在参数足够时，才调用工具。"
+                "如果问题不需要工具，就直接回答。"
+            ),
+        },
+        {"role": "user", "content": cleaned_message},
+    ]
+
+    executed_steps: list[ChatAgentLoopStepItem] = []
+
+    for step in range(1, request.max_steps + 1):
+        completion = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=messages,
+            tools=TOOL_DEFINITIONS,
+            tool_choice="auto",
+        )
+        assistant_message = completion.choices[0].message
+        tool_calls = assistant_message.tool_calls or []
+
+        if not tool_calls:
+            return ChatAgentRouteDemoResponse(
+                reply=assistant_message.content or "",
+                model=settings.llm_model,
+                used_tool=bool(executed_steps),
+                total_steps=len(executed_steps),
+                stopped_by_max_steps=False,
+                steps=executed_steps,
+            )
+
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_message.content or "",
+                "tool_calls": serialize_tool_calls(tool_calls),
+            }
+        )
+
+        for tool_call in tool_calls:
+            raw_arguments = tool_call.function.arguments or "{}"
+            tool_args = parse_tool_args(raw_arguments)
+            tool_result = execute_demo_tool(tool_call.function.name, tool_args)
+
+            executed_steps.append(
+                ChatAgentLoopStepItem(
+                    step=step,
+                    tool_name=tool_call.function.name,
+                    tool_args=normalize_tool_args_for_response(tool_args),
+                    tool_result=tool_result,
+                )
+            )
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_result,
+                }
+            )
+
+    final_completion = client.chat.completions.create(
+        model=settings.llm_model,
+        messages=messages,
+    )
+    final_reply = final_completion.choices[0].message.content or ""
+
+    return ChatAgentRouteDemoResponse(
+        reply=final_reply,
+        model=settings.llm_model,
+        used_tool=bool(executed_steps),
+        total_steps=len(executed_steps),
+        stopped_by_max_steps=True,
+        steps=executed_steps,
+    )
 
 
 def build_summary_reply(request: ChatSummaryRequest) -> ChatSummaryResponse:
