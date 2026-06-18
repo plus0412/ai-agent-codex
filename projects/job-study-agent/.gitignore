@@ -1,0 +1,17 @@
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local environment config
+.env
+
+# Local storage / generated knowledge indexes
+storage/
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
